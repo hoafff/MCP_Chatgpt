@@ -215,9 +215,56 @@
     );
   }
 
-  function latestAssistantMessage() {
-    const messages = document.querySelectorAll('[data-message-author-role="assistant"]');
-    return messages.length ? messages[messages.length - 1] : null;
+  function elementText(element) {
+    return element ? (element.innerText || element.textContent || '') : '';
+  }
+
+  function smallestVisibleElementContaining(requiredMarkers, rejectedMarkers = []) {
+    const root = document.querySelector('main') || document.body;
+    if (!root) return null;
+
+    const candidates = root.querySelectorAll('article, div, p, pre');
+    let best = null;
+    let bestLength = Number.POSITIVE_INFINITY;
+
+    candidates.forEach((element) => {
+      const text = elementText(element);
+      if (!text) return;
+      if (!requiredMarkers.every((marker) => text.includes(marker))) return;
+      if (rejectedMarkers.some((marker) => text.includes(marker))) return;
+
+      const rect = element.getBoundingClientRect();
+      if (rect.width === 0 && rect.height === 0) return;
+
+      const length = text.length;
+      if (length <= bestLength) {
+        best = element;
+        bestLength = length;
+      }
+    });
+
+    return best;
+  }
+
+  function latestToolCallContainer() {
+    const roleMessages = document.querySelectorAll('[data-message-author-role="assistant"]');
+    for (let i = roleMessages.length - 1; i >= 0; i--) {
+      const message = roleMessages[i];
+      const text = elementText(message);
+      if (
+        text.includes('<LOCAL_TOOL>') &&
+        text.includes('</LOCAL_TOOL>') &&
+        !text.includes('[LOCAL BRIDGE INSTRUCTION]') &&
+        !text.includes('[LOCAL_BRIDGE_RESULT]')
+      ) {
+        return message;
+      }
+    }
+
+    return smallestVisibleElementContaining(
+      ['<LOCAL_TOOL>', '</LOCAL_TOOL>'],
+      ['[LOCAL BRIDGE INSTRUCTION]', '[LOCAL_BRIDGE_RESULT]']
+    );
   }
 
   function parseToolCall(text) {
@@ -278,10 +325,10 @@
 
   async function inspectAssistant() {
     if (processing || isStreaming()) return;
-    const message = latestAssistantMessage();
+    const message = latestToolCallContainer();
     if (!message) return;
 
-    const text = message.innerText || message.textContent || '';
+    const text = elementText(message);
     const call = parseToolCall(text);
     if (!call) return;
 
@@ -347,33 +394,80 @@
     const userMessages = document.querySelectorAll('[data-message-author-role="user"]');
     userMessages.forEach((message) => {
       if (message.getAttribute('data-local-bridge-cleaned') === 'true') return;
-      const text = message.innerText || message.textContent || '';
+      const text = elementText(message);
       const container = findMessageTextContainer(message, 'user');
-      if (!container) return;
 
       if (text.includes('[LOCAL BRIDGE INSTRUCTION]') && text.includes('[USER REQUEST]')) {
         const original = text.split('[USER REQUEST]').slice(1).join('[USER REQUEST]').trim();
-        container.textContent = original || '@local request';
-        message.setAttribute('data-local-bridge-cleaned', 'true');
+        const target =
+          container ||
+          smallestVisibleElementContaining(
+            ['[LOCAL BRIDGE INSTRUCTION]', '[USER REQUEST]'],
+            ['[LOCAL_BRIDGE_RESULT]']
+          );
+        if (target) {
+          target.textContent = original || '@local request';
+          message.setAttribute('data-local-bridge-cleaned', 'true');
+        }
         return;
       }
 
       if (text.includes('[LOCAL_BRIDGE_RESULT]')) {
         const actionMatch = text.match(/Action:\s*([^\n\r]+)/i);
         const action = actionMatch ? actionMatch[1].trim() : 'local read';
-        container.innerHTML = '';
-        container.appendChild(makeCompactDetails('Local Bridge result · ' + action, text, 'result'));
-        message.setAttribute('data-local-bridge-cleaned', 'true');
+        const target =
+          container ||
+          smallestVisibleElementContaining(
+            ['[LOCAL_BRIDGE_RESULT]'],
+            ['[LOCAL BRIDGE INSTRUCTION]']
+          );
+        if (target) {
+          target.innerHTML = '';
+          target.appendChild(makeCompactDetails('Local Bridge result · ' + action, text, 'result'));
+          message.setAttribute('data-local-bridge-cleaned', 'true');
+        }
       }
     });
 
-    const assistantMessages = document.querySelectorAll('[data-message-author-role="assistant"][data-local-bridge-executed="true"]');
-    assistantMessages.forEach((message) => {
+    // Current ChatGPT DOM variants do not always expose data-message-author-role.
+    // Compact the injected user instruction/result using marker-based fallback.
+    const instructionTarget = smallestVisibleElementContaining(
+      ['[LOCAL BRIDGE INSTRUCTION]', '[USER REQUEST]'],
+      ['[LOCAL_BRIDGE_RESULT]']
+    );
+    if (instructionTarget && !instructionTarget.closest('[data-local-bridge-cleaned="true"]')) {
+      const text = elementText(instructionTarget);
+      const original = text.split('[USER REQUEST]').slice(1).join('[USER REQUEST]').trim();
+      instructionTarget.textContent = original || '@local request';
+      instructionTarget.setAttribute('data-local-bridge-cleaned', 'true');
+    }
+
+    const resultTarget = smallestVisibleElementContaining(
+      ['[LOCAL_BRIDGE_RESULT]'],
+      ['[LOCAL BRIDGE INSTRUCTION]']
+    );
+    if (resultTarget && !resultTarget.closest('[data-local-bridge-cleaned="true"]')) {
+      const text = elementText(resultTarget);
+      const actionMatch = text.match(/Action:\s*([^\n\r]+)/i);
+      const action = actionMatch ? actionMatch[1].trim() : 'local read';
+      resultTarget.innerHTML = '';
+      resultTarget.appendChild(makeCompactDetails('Local Bridge result · ' + action, text, 'result'));
+      resultTarget.setAttribute('data-local-bridge-cleaned', 'true');
+    }
+
+    const executedMessages = document.querySelectorAll('[data-local-bridge-executed="true"]');
+    executedMessages.forEach((message) => {
       if (message.getAttribute('data-local-bridge-cleaned') === 'true') return;
-      const text = message.innerText || message.textContent || '';
+      const text = elementText(message);
       const call = parseToolCall(text);
-      const container = findMessageTextContainer(message, 'assistant');
-      if (!call || !container) return;
+      if (!call) return;
+      const container =
+        findMessageTextContainer(message, 'assistant') ||
+        smallestVisibleElementContaining(
+          ['<LOCAL_TOOL>', '</LOCAL_TOOL>'],
+          ['[LOCAL BRIDGE INSTRUCTION]', '[LOCAL_BRIDGE_RESULT]']
+        );
+      if (!container) return;
       container.innerHTML = '';
       container.appendChild(
         makeCompactDetails('Local Bridge tool · ' + call.action, JSON.stringify(call, null, 2), 'tool')
