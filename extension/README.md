@@ -4,46 +4,90 @@ This unpacked Chrome/Edge extension connects a normal `chatgpt.com` conversation
 
 It does **not** use the OpenAI API and it does **not** require ChatGPT custom MCP support.
 
-## Safety posture in v0.1
+## Safe Manual-Send Mode
 
-The browser bridge exposes only:
+Version 0.2.0 intentionally avoids browser automation of ChatGPT responses.
 
-- `list_directory`
-- `read_file`
-- `file_info`
-- `search_text`
+The extension does **not**:
 
-All paths still pass through the server's existing `allowedRoots`, `protectedPaths`, real-path/junction checks, file-size limits, and audit logger.
+- inspect or scrape ChatGPT assistant replies;
+- wait for `<LOCAL_TOOL>` responses;
+- auto-loop tool calls;
+- press ChatGPT's Send button;
+- expose shell, write, delete, Git commit, or Git push through the browser bridge.
 
-The extension becomes active only when a user prompt contains either:
+Instead:
 
-- `@local` / `@local-mcp`, or
-- an absolute Windows path such as `E:\\Projects\\repo\\README.md`.
+1. You type a normal request containing `@local` or a Windows path.
+2. On the first Enter/click, the extension prevents that message from being sent.
+3. It reads the requested local file or lists the requested local directory through `127.0.0.1`.
+4. It replaces the composer text with your original request plus the actual local material.
+5. It **stops**.
+6. You review/edit the material.
+7. You manually press Send only if you approve what will be uploaded to ChatGPT.
 
-Other ChatGPT prompts are left alone.
+This makes the browser extension closer to a local attachment helper than an autonomous web agent.
+
+## Local safety boundary
+
+Browser access remains read-only and all paths still pass through the server's existing:
+
+- `allowedRoots`;
+- `protectedPaths`;
+- real-path / symlink / junction checks;
+- read-size limits;
+- audit logger.
+
+The local server remains bound to `127.0.0.1`.
 
 ## Load unpacked
 
 1. Start the local server from the repository root.
-2. Open `chrome://extensions` (or `edge://extensions`).
+2. Open `chrome://extensions` or `edge://extensions`.
 3. Enable **Developer mode**.
 4. Choose **Load unpacked**.
 5. Select this repository's `extension` folder.
-6. Open or refresh `https://chatgpt.com/`.
-7. A small **Local Bridge: ready** badge should appear in the lower-right corner.
+6. Refresh `https://chatgpt.com/`.
+7. Confirm the badge says **Local Bridge: safe mode ready**.
 
-Clicking the extension icon also reports whether the local read-only bridge is reachable.
+## Usage
 
-## First test
-
-In a normal ChatGPT conversation, send something like:
+Example:
 
 ```text
-@local đọc file E:\\MCP_ChatGpt\\README.md và cho tôi biết project này làm gì
+@local đọc file E:\MCP_ChatGpt\README.md và tóm tắt project này
 ```
 
-The extension adds a local-tool protocol instruction to that turn. If ChatGPT emits a `<LOCAL_TOOL>...</LOCAL_TOOL>` request, the extension calls the local read-only bridge, inserts the real result into the same conversation, and lets ChatGPT continue.
+Press Enter once. The message is **not sent**. The composer becomes something like:
 
-## Notes
+```text
+[LOCAL_BRIDGE_READY_FOR_MANUAL_SEND]
+[LOCAL MATERIAL FROM THIS COMPUTER — REVIEW BEFORE SENDING]
+Source: E:\MCP_ChatGpt\README.md
+...
 
-This is browser UI automation, not an official ChatGPT MCP integration. ChatGPT DOM changes can require selector updates. Keep the local server bound to `127.0.0.1` and do not expose the bridge publicly.
+[LOCAL MATERIAL]
+...real local file content...
+[/LOCAL MATERIAL]
+
+[ORIGINAL REQUEST]
+đọc file E:\MCP_ChatGpt\README.md và tóm tắt project này
+
+[PRIVACY CHECK]
+...
+Nothing has been sent automatically. Press Send yourself only if you approve.
+```
+
+Review the material and manually press Send.
+
+For paths containing spaces, quoting the full path is recommended:
+
+```text
+@local đọc "E:\My Project\notes.txt" và tóm tắt
+```
+
+## Privacy warning
+
+Once **you manually press Send**, the inserted local material is uploaded to ChatGPT just as if you pasted it yourself.
+
+Do not send passwords, API keys, access tokens, cookies, private keys, recovery codes, credentials, or confidential material that you do not want in the conversation.

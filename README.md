@@ -95,46 +95,49 @@ npm start
 
 For ChatGPT Plus users who want to keep using a normal conversation on `chatgpt.com` without the OpenAI API or a separate chat UI, this repository includes an unpacked Chrome/Edge extension under `extension/`.
 
-The extension is **not** native ChatGPT MCP. It augments the browser UI:
+The extension is **not** native ChatGPT MCP. Version 0.2.0 uses **Safe Manual-Send Mode**:
 
 ```text
-normal ChatGPT web conversation
+you type @local + a Windows path
         ↓
-Chrome/Edge content script
+extension blocks that first Send
         ↓
-extension background worker
-        ↓
-http://127.0.0.1:8787/bridge/*
+read-only localhost bridge
         ↓
 existing allowedRoots / protectedPaths / audit policy
+        ↓
+local material is inserted into the ChatGPT composer
+        ↓
+extension stops
+        ↓
+you review/edit the material
+        ↓
+you manually press Send
 ```
 
-Browser Bridge v0.1 is intentionally **read-only** and exposes only:
+In this mode the extension does **not** inspect ChatGPT replies, does not parse assistant output, does not auto-loop, and does not press Send for you.
 
-- `list_directory`
-- `read_file`
-- `file_info`
-- `search_text`
+Browser access remains read-only. It can inspect a path, read a text file, or list a directory through the existing filesystem security policy. It does not expose shell, process, write, delete, Git commit, or Git push actions.
 
-The bridge reuses the existing filesystem security policy. It does not expose shell, process, write, delete, Git commit, or Git push actions.
-
-After building and starting the local server:
-
-1. Open `chrome://extensions` or `edge://extensions`.
-2. Enable **Developer mode**.
-3. Choose **Load unpacked**.
-4. Select `E:\\MCP_ChatGpt\\extension` (or this repo's local `extension` directory).
-5. Refresh `https://chatgpt.com/`.
-6. Confirm the lower-right badge says **Local Bridge: ready**.
-7. Trigger it with `@local` or an absolute Windows path in your prompt.
+Safe Mode activates only when the prompt explicitly contains `@local`.
 
 Example:
 
 ```text
-@local đọc file E:\\MCP_ChatGpt\\README.md và tóm tắt project này
+@local đọc file E:\MCP_ChatGpt\README.md và tóm tắt project này
 ```
 
-See `extension/README.md` for the bridge workflow and troubleshooting notes.
+For paths containing spaces, quote the full path:
+
+```text
+@local đọc "E:\My Project\notes.txt" và tóm tắt
+```
+
+The first Enter/click prepares the local material but does **not** send it. Review the composer and manually press Send only if you approve the content.
+
+Once you manually press Send, the inserted local content is uploaded to ChatGPT just as if you pasted it yourself. Do not send secrets, tokens, passwords, private keys, cookies, credentials, recovery codes, or confidential material that you do not want in the conversation.
+
+See `extension/README.md` for setup and detailed safety notes.
 
 ## Automated self-test
 

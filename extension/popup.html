@@ -5,24 +5,25 @@
   <style>
     body { width: 360px; font: 13px system-ui, sans-serif; margin: 0; padding: 14px; background: #111827; color: #f9fafb; }
     h1 { font-size: 15px; margin: 0 0 10px; }
-    #status, #pageStatus { padding: 9px 10px; border-radius: 8px; background: #1f2937; margin-bottom: 10px; }
+    #status, .mode { padding: 9px 10px; border-radius: 8px; background: #1f2937; margin-bottom: 10px; }
     .ok { color: #34d399; }
     .bad { color: #f87171; }
+    .safe { color: #93c5fd; }
     code { color: #93c5fd; }
     p { line-height: 1.45; margin: 8px 0 0; color: #d1d5db; }
-    button { width: 100%; margin: 8px 0 10px; padding: 9px 10px; border: 0; border-radius: 8px; background: #2563eb; color: white; cursor: pointer; font-weight: 600; }
-    button:disabled { opacity: .55; cursor: default; }
-    pre { margin: 0; padding: 9px 10px; border-radius: 8px; background: #0b1220; color: #cbd5e1; white-space: pre-wrap; max-height: 250px; overflow: auto; font: 11px ui-monospace, monospace; }
+    strong { color: #f9fafb; }
   </style>
 </head>
 <body>
-  <h1>ChatGPT Local Bridge <span style="opacity:.6">0.1.3</span></h1>
+  <h1>ChatGPT Local Bridge <span style="opacity:.6">0.2.0</span></h1>
   <div id="status">Checking local bridge...</div>
-  <div id="pageStatus">Checking ChatGPT page...</div>
-  <button id="scanNow" type="button">Scan current ChatGPT page now</button>
-  <pre id="debug">No page telemetry yet.</pre>
-  <p>Trigger local access with <code>@local</code> or a Windows path such as <code>E:\project\file.txt</code>.</p>
-  <p>Read-only: list, read, info, search.</p>
+  <div class="mode safe">
+    <strong>Safe Manual-Send Mode</strong><br>
+    Reads local data into the composer only. It does not inspect ChatGPT replies and never presses Send for you.
+  </div>
+  <p>Type <code>@local</code> plus a Windows path, then press Enter once.</p>
+  <p>The extension will replace the composer with your request + local data and stop. Review it, remove anything sensitive, then press Send yourself.</p>
+  <p>Read-only local access: file info, file read, directory list.</p>
   <script src="popup.js"></script>
 </body>
 </html>
