@@ -189,6 +189,10 @@
     const text = readEditor(editor).trim();
     if (!shouldUseLocal(text)) return;
 
+    // A fresh user-triggered local request may legitimately repeat an earlier
+    // read, so de-duplicate only within the current local tool loop.
+    executed.clear();
+
     event.preventDefault();
     event.stopPropagation();
     if (typeof event.stopImmediatePropagation === 'function') event.stopImmediatePropagation();
@@ -284,6 +288,7 @@
     const fp = fingerprint(call);
     if (!fp || executed.has(fp)) return;
     executed.add(fp);
+    message.setAttribute('data-local-bridge-executed', 'true');
     processing = true;
     setStatus('reading local data');
 
@@ -300,6 +305,81 @@
         processing = false;
       }, 700);
     }
+  }
+
+
+  function findMessageTextContainer(message, role) {
+    if (!message) return null;
+    if (role === 'user') {
+      return (
+        message.querySelector('.whitespace-pre-wrap') ||
+        message.querySelector('[class*="whitespace-pre-wrap"]') ||
+        message.querySelector('[class*="break-words"]')
+      );
+    }
+    return message.querySelector('.markdown') || message.querySelector('[class*="markdown"]');
+  }
+
+  function makeCompactDetails(title, detailText, tone) {
+    const details = document.createElement('details');
+    details.style.cssText = [
+      'margin:4px 0',
+      'padding:7px 10px',
+      'border-radius:8px',
+      'border:1px solid ' + (tone === 'result' ? 'rgba(52,211,153,.35)' : 'rgba(96,165,250,.35)'),
+      'background:' + (tone === 'result' ? 'rgba(16,185,129,.08)' : 'rgba(59,130,246,.08)'),
+      'font:12px system-ui,sans-serif'
+    ].join(';');
+
+    const summary = document.createElement('summary');
+    summary.textContent = title;
+    summary.style.cssText = 'cursor:pointer;font-weight:600;';
+    details.appendChild(summary);
+
+    const pre = document.createElement('pre');
+    pre.textContent = detailText;
+    pre.style.cssText = 'white-space:pre-wrap;max-height:240px;overflow:auto;margin:8px 0 0;font:11px ui-monospace,monospace;opacity:.82;';
+    details.appendChild(pre);
+    return details;
+  }
+
+  function cleanBridgeUi() {
+    const userMessages = document.querySelectorAll('[data-message-author-role="user"]');
+    userMessages.forEach((message) => {
+      if (message.getAttribute('data-local-bridge-cleaned') === 'true') return;
+      const text = message.innerText || message.textContent || '';
+      const container = findMessageTextContainer(message, 'user');
+      if (!container) return;
+
+      if (text.includes('[LOCAL BRIDGE INSTRUCTION]') && text.includes('[USER REQUEST]')) {
+        const original = text.split('[USER REQUEST]').slice(1).join('[USER REQUEST]').trim();
+        container.textContent = original || '@local request';
+        message.setAttribute('data-local-bridge-cleaned', 'true');
+        return;
+      }
+
+      if (text.includes('[LOCAL_BRIDGE_RESULT]')) {
+        const actionMatch = text.match(/Action:\s*([^\n\r]+)/i);
+        const action = actionMatch ? actionMatch[1].trim() : 'local read';
+        container.innerHTML = '';
+        container.appendChild(makeCompactDetails('Local Bridge result · ' + action, text, 'result'));
+        message.setAttribute('data-local-bridge-cleaned', 'true');
+      }
+    });
+
+    const assistantMessages = document.querySelectorAll('[data-message-author-role="assistant"][data-local-bridge-executed="true"]');
+    assistantMessages.forEach((message) => {
+      if (message.getAttribute('data-local-bridge-cleaned') === 'true') return;
+      const text = message.innerText || message.textContent || '';
+      const call = parseToolCall(text);
+      const container = findMessageTextContainer(message, 'assistant');
+      if (!call || !container) return;
+      container.innerHTML = '';
+      container.appendChild(
+        makeCompactDetails('Local Bridge tool · ' + call.action, JSON.stringify(call, null, 2), 'tool')
+      );
+      message.setAttribute('data-local-bridge-cleaned', 'true');
+    });
   }
 
   document.addEventListener(
@@ -333,6 +413,7 @@
   );
 
   const observer = new MutationObserver(() => {
+    cleanBridgeUi();
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
       void inspectAssistant();
@@ -341,7 +422,16 @@
 
   observer.observe(document.documentElement, { childList: true, subtree: true });
   ensureBadge();
+  cleanBridgeUi();
   void refreshTools();
+
+  // DOM mutation events can stop before ChatGPT removes its streaming controls.
+  // Polling guarantees one final inspection after the turn is actually complete.
+  setInterval(() => {
+    cleanBridgeUi();
+    void inspectAssistant();
+  }, 750);
+
   setInterval(() => {
     void refreshTools();
   }, 15000);

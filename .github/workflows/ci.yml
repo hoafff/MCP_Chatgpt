@@ -14,4 +14,7 @@ jobs:
           node-version: 22
       - run: npm install
       - run: npm run check
+      - run: node --check extension/background.js
+      - run: node --check extension/content.js
+      - run: node --check extension/popup.js
       - run: npm run build
