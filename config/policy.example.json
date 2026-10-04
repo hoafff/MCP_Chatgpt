@@ -1,0 +1,50 @@
+{
+  "allowedRoots": [
+    "D:\\Projects",
+    "D:\\ViraAI_RECOVER",
+    "E:\\AIProjects"
+  ],
+  "protectedPaths": [
+    "C:\\Users\\YOUR_USERNAME\\.ssh",
+    "C:\\Users\\YOUR_USERNAME\\.aws",
+    "C:\\Users\\YOUR_USERNAME\\.azure",
+    "C:\\Users\\YOUR_USERNAME\\AppData\\Local\\Google\\Chrome\\User Data",
+    "C:\\Users\\YOUR_USERNAME\\AppData\\Local\\Microsoft\\Edge\\User Data"
+  ],
+  "filesystem": {
+    "maxReadBytes": 2097152,
+    "maxWriteBytes": 4194304,
+    "searchMaxFileBytes": 2097152,
+    "searchSkipDirectories": [".git", "node_modules", "dist", "build", ".venv", "venv"]
+  },
+  "shell": {
+    "enabled": true,
+    "executable": "powershell.exe",
+    "defaultTimeoutMs": 120000,
+    "maxTimeoutMs": 600000,
+    "maxOutputBytes": 1048576,
+    "blockedPatterns": [
+      "\\bformat(?:\\.com)?\\b",
+      "\\bdiskpart\\b",
+      "\\bbcdedit\\b",
+      "\\bvssadmin\\s+delete\\s+shadows\\b",
+      "\\bshutdown(?:\\.exe)?\\b",
+      "\\brestart-computer\\b",
+      "\\bstop-computer\\b",
+      "set-mppreference\\s+.*-disablerealtimemonitoring",
+      "reg(?:\\.exe)?\\s+delete\\s+HKLM",
+      "remove-item\\s+(?:-recurse\\s+)?(?:-force\\s+)?[\"']?[A-Za-z]:\\\\?[\"']?\\s*$",
+      "rm\\s+-rf\\s+/(?:\\s|$)"
+    ]
+  },
+  "git": {
+    "allowCommit": false,
+    "allowPush": false,
+    "maxOutputBytes": 1048576
+  },
+  "audit": {
+    "enabled": true,
+    "directory": "logs",
+    "logCommands": true
+  }
+}
