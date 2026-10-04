@@ -5,3 +5,6 @@ config/policy.json
 .env
 .DS_Store
 Thumbs.db
+
+config/*.bak
+logs/
