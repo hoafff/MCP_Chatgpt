@@ -6,6 +6,31 @@
   let bypassNextSend = false;
   let processing = false;
   let debounceTimer = null;
+  const debugState = {
+    version: '0.1.3',
+    scans: 0,
+    lastScanAt: null,
+    visibleStreaming: false,
+    toolContainerFound: false,
+    parseOk: false,
+    lastAction: null,
+    bridgeCallOk: null,
+    resultInjected: false,
+    submitOk: null,
+    lastError: null
+  };
+
+  function updateDebug(patch) {
+    Object.assign(debugState, patch, { lastScanAt: new Date().toISOString() });
+  }
+
+  function debugSnapshot() {
+    return {
+      ...debugState,
+      executedCount: executed.size,
+      url: location.href
+    };
+  }
 
   function send(message) {
     return new Promise((resolve) => {
@@ -207,12 +232,23 @@
     }, 120);
   }
 
+  function isVisible(element) {
+    if (!element) return false;
+    const style = window.getComputedStyle(element);
+    if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+    const rect = element.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  }
+
   function isStreaming() {
-    return Boolean(
-      document.querySelector('button[data-testid="stop-button"]') ||
-      document.querySelector('button[aria-label*="Stop"]') ||
-      document.querySelector('button[aria-label*="Dừng"]')
-    );
+    const candidates = [
+      ...document.querySelectorAll('button[data-testid="stop-button"]'),
+      ...document.querySelectorAll('button[aria-label*="Stop"]'),
+      ...document.querySelectorAll('button[aria-label*="Dừng"]')
+    ];
+    const visible = candidates.some(isVisible);
+    updateDebug({ visibleStreaming: visible });
+    return visible;
   }
 
   function elementText(element) {
@@ -292,6 +328,7 @@
   async function sendToolResult(call, response) {
     const editor = getEditor();
     if (!editor) {
+      updateDebug({ lastError: 'composer not found', resultInjected: false, submitOk: false });
       setStatus('composer not found', false);
       return;
     }
@@ -316,24 +353,58 @@
       'Use this real local result. If you need another local read, reply only with the next single <LOCAL_TOOL> request. Otherwise answer the original user request normally.'
     ].join('\n');
 
-    writeEditor(editor, resultMessage);
+    const injected = writeEditor(editor, resultMessage);
+    updateDebug({
+      bridgeCallOk: Boolean(response && response.ok),
+      resultInjected: Boolean(injected),
+      lastError: response && response.ok ? null : ((response && response.error) || 'Unknown local bridge error')
+    });
     setStatus(response && response.ok ? 'result returned' : 'tool error', Boolean(response && response.ok));
     setTimeout(() => {
-      if (!submitEditor(editor)) setStatus('could not return result', false);
+      const submitted = submitEditor(editor);
+      updateDebug({ submitOk: Boolean(submitted), lastError: submitted ? debugState.lastError : 'could not return result' });
+      if (!submitted) setStatus('could not return result', false);
     }, 120);
   }
 
-  async function inspectAssistant() {
-    if (processing || isStreaming()) return;
-    const message = latestToolCallContainer();
-    if (!message) return;
+  async function inspectAssistant(force = false) {
+    debugState.scans += 1;
+    updateDebug({ lastError: null });
 
+    if (processing) {
+      updateDebug({ lastError: 'scan skipped: already processing' });
+      return;
+    }
+
+    if (!force && isStreaming()) {
+      updateDebug({ toolContainerFound: false, parseOk: false, lastError: 'scan skipped: visible streaming control detected' });
+      return;
+    }
+
+    const message = latestToolCallContainer();
+    if (!message) {
+      updateDebug({ toolContainerFound: false, parseOk: false, lastError: 'no LOCAL_TOOL container found' });
+      return;
+    }
+
+    updateDebug({ toolContainerFound: true });
     const text = elementText(message);
     const call = parseToolCall(text);
-    if (!call) return;
+    if (!call) {
+      updateDebug({ parseOk: false, lastError: 'LOCAL_TOOL found but JSON parse failed' });
+      return;
+    }
 
+    updateDebug({ parseOk: true, lastAction: call.action });
     const fp = fingerprint(call);
-    if (!fp || executed.has(fp)) return;
+    if (!fp) {
+      updateDebug({ lastError: 'tool fingerprint failed' });
+      return;
+    }
+    if (executed.has(fp)) {
+      updateDebug({ lastError: 'tool call already executed in current loop' });
+      return;
+    }
     executed.add(fp);
     message.setAttribute('data-local-bridge-executed', 'true');
     processing = true;
@@ -346,7 +417,14 @@
         return;
       }
       const response = await send({ type: 'BRIDGE_CALL', call });
+      updateDebug({
+        bridgeCallOk: Boolean(response && response.ok),
+        lastError: response && response.ok ? null : ((response && response.error) || 'bridge call failed')
+      });
       await sendToolResult(call, response);
+    } catch (error) {
+      updateDebug({ bridgeCallOk: false, lastError: error instanceof Error ? error.message : String(error) });
+      setStatus('execution error', false);
     } finally {
       setTimeout(() => {
         processing = false;
@@ -475,6 +553,28 @@
       message.setAttribute('data-local-bridge-cleaned', 'true');
     });
   }
+
+
+  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if (message && message.type === 'LOCAL_DEBUG_STATE') {
+      sendResponse({ ok: true, debug: debugSnapshot() });
+      return;
+    }
+
+    if (message && message.type === 'LOCAL_SCAN_NOW') {
+      void (async () => {
+        try {
+          executed.clear();
+          await inspectAssistant(true);
+          sendResponse({ ok: true, debug: debugSnapshot() });
+        } catch (error) {
+          updateDebug({ lastError: error instanceof Error ? error.message : String(error) });
+          sendResponse({ ok: false, debug: debugSnapshot(), error: debugState.lastError });
+        }
+      })();
+      return true;
+    }
+  });
 
   document.addEventListener(
     'keydown',
