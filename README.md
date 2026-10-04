@@ -91,6 +91,24 @@ $env:MCP_POLICY_PATH = "D:\\MCP\\my-policy.json"
 npm start
 ```
 
+## Automated self-test
+
+With the MCP server already running in another terminal, run:
+
+```powershell
+npm.cmd run self-test
+```
+
+The self-test exercises the health endpoint, MCP initialize, tools/list, filesystem read/write, the allowedRoots rejection path, shell execution, background process lifecycle, Git status, and the Git commit policy gate. It creates a temporary file under `logs/` and deletes it at the end.
+
+The test expects the current working directory to be one of `allowedRoots` and expects `git.allowCommit=false`. Override the endpoint/root when needed:
+
+```powershell
+$env:MCP_SELF_TEST_URL = "http://127.0.0.1:8787/mcp"
+$env:MCP_SELF_TEST_ROOT = "E:\\MCP_ChatGpt"
+npm.cmd run self-test
+```
+
 ## Stdio mode
 
 For an MCP host that launches the local server as a child process:
