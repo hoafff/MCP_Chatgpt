@@ -1,0 +1,348 @@
+(() => {
+  const TOOL_TAG = /<LOCAL_TOOL>\s*([\s\S]*?)\s*<\/LOCAL_TOOL>/i;
+  const MAX_RESULT_CHARS = 120000;
+  const executed = new Set();
+  let tools = [];
+  let bypassNextSend = false;
+  let processing = false;
+  let debounceTimer = null;
+
+  function send(message) {
+    return new Promise((resolve) => {
+      chrome.runtime.sendMessage(message, (response) => {
+        if (chrome.runtime.lastError) {
+          resolve({ ok: false, error: chrome.runtime.lastError.message });
+        } else {
+          resolve(response);
+        }
+      });
+    });
+  }
+
+  function ensureBadge() {
+    let badge = document.getElementById('chatgpt-local-bridge-badge');
+    if (badge) return badge;
+    badge = document.createElement('div');
+    badge.id = 'chatgpt-local-bridge-badge';
+    badge.style.cssText = [
+      'position:fixed',
+      'right:18px',
+      'bottom:18px',
+      'z-index:999999',
+      'padding:7px 10px',
+      'border-radius:9px',
+      'font:12px system-ui,sans-serif',
+      'background:rgba(17,24,39,.92)',
+      'color:#d1d5db',
+      'border:1px solid rgba(255,255,255,.14)',
+      'box-shadow:0 6px 20px rgba(0,0,0,.25)',
+      'pointer-events:none'
+    ].join(';');
+    badge.textContent = 'Local Bridge: checking';
+    document.body.appendChild(badge);
+    return badge;
+  }
+
+  function setStatus(text, ok = true) {
+    const badge = ensureBadge();
+    badge.textContent = 'Local Bridge: ' + text;
+    badge.style.color = ok ? '#34d399' : '#f87171';
+  }
+
+  async function refreshTools() {
+    const status = await send({ type: 'BRIDGE_STATUS' });
+    if (!status || !status.ok) {
+      setStatus('offline', false);
+      return;
+    }
+    const response = await send({ type: 'BRIDGE_TOOLS' });
+    if (response && response.ok && Array.isArray(response.tools)) {
+      tools = response.tools;
+      setStatus('ready');
+    } else {
+      setStatus('tool sync failed', false);
+    }
+  }
+
+  function getEditor() {
+    return (
+      document.querySelector('#prompt-textarea') ||
+      document.querySelector('form [contenteditable="true"]') ||
+      document.querySelector('[contenteditable="true"][data-lexical-editor="true"]')
+    );
+  }
+
+  function readEditor(editor) {
+    if (!editor) return '';
+    if (editor instanceof HTMLTextAreaElement || editor instanceof HTMLInputElement) return editor.value || '';
+    return editor.innerText || editor.textContent || '';
+  }
+
+  function writeEditor(editor, text) {
+    if (!editor) return false;
+    editor.focus();
+
+    if (editor instanceof HTMLTextAreaElement || editor instanceof HTMLInputElement) {
+      const proto = editor instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+      const descriptor = Object.getOwnPropertyDescriptor(proto, 'value');
+      const setter = descriptor && descriptor.set;
+      if (setter) setter.call(editor, text);
+      else editor.value = text;
+      editor.dispatchEvent(new Event('input', { bubbles: true }));
+      editor.dispatchEvent(new Event('change', { bubbles: true }));
+      return true;
+    }
+
+    try {
+      const selection = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(editor);
+      selection.removeAllRanges();
+      selection.addRange(range);
+      document.execCommand('insertText', false, text);
+      editor.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
+      return true;
+    } catch (error) {
+      editor.textContent = text;
+      editor.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
+      return true;
+    }
+  }
+
+  function submitEditor(editor) {
+    const form = editor && editor.closest('form');
+    const button =
+      (form && form.querySelector('button[data-testid="send-button"]')) ||
+      (form && form.querySelector('button[aria-label*="Send"]')) ||
+      (form && form.querySelector('button[aria-label*="Gửi"]')) ||
+      document.querySelector('button[data-testid="send-button"]');
+
+    if (button && !button.disabled) {
+      bypassNextSend = true;
+      button.click();
+      setTimeout(() => {
+        bypassNextSend = false;
+      }, 800);
+      return true;
+    }
+
+    if (form && typeof form.requestSubmit === 'function') {
+      bypassNextSend = true;
+      form.requestSubmit();
+      setTimeout(() => {
+        bypassNextSend = false;
+      }, 800);
+      return true;
+    }
+
+    return false;
+  }
+
+  function shouldUseLocal(text) {
+    if (!text) return false;
+    if (text.includes('[LOCAL_BRIDGE_RESULT]')) return false;
+    return /@local(?:-mcp)?\b/i.test(text) || /\b[A-Za-z]:\\[^\r\n]*/.test(text);
+  }
+
+  function toolInstruction(userText) {
+    const toolLines = (tools.length ? tools : [
+      { name: 'list_directory', description: 'List files and folders in an allowed directory.' },
+      { name: 'read_file', description: 'Read an allowed UTF-8 file, optionally by line range.' },
+      { name: 'file_info', description: 'Get metadata for an allowed path.' },
+      { name: 'search_text', description: 'Search text recursively under an allowed directory.' }
+    ])
+      .map((tool) => '- ' + tool.name + ': ' + tool.description)
+      .join('\n');
+
+    const cleaned = userText.replace(/@local(?:-mcp)?\b/gi, '').trim();
+
+    return [
+      '[LOCAL BRIDGE INSTRUCTION]',
+      'A read-only local-file bridge is available in this browser conversation.',
+      'When local data is needed, reply with exactly ONE tool request and no surrounding prose:',
+      '<LOCAL_TOOL>',
+      '{"action":"read_file","path":"E:\\\\path\\\\file.txt"}',
+      '</LOCAL_TOOL>',
+      '',
+      'Allowed actions:',
+      toolLines,
+      '',
+      'Schemas:',
+      '- list_directory: {"action":"list_directory","path":"..."}',
+      '- read_file: {"action":"read_file","path":"...","startLine":1,"endLine":200}',
+      '- file_info: {"action":"file_info","path":"..."}',
+      '- search_text: {"action":"search_text","root":"...","query":"...","useRegex":false,"caseSensitive":false,"maxResults":50}',
+      '',
+      'Rules:',
+      '- Use only these read-only actions.',
+      '- Never invent local file contents.',
+      '- If another local read is needed after a result, emit the next single <LOCAL_TOOL> request.',
+      '- When enough local information has been gathered, answer the user normally.',
+      '',
+      '[USER REQUEST]',
+      cleaned || userText
+    ].join('\n');
+  }
+
+  function interceptManualSend(event, editor) {
+    if (bypassNextSend) return;
+    const text = readEditor(editor).trim();
+    if (!shouldUseLocal(text)) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    if (typeof event.stopImmediatePropagation === 'function') event.stopImmediatePropagation();
+
+    const enriched = toolInstruction(text);
+    writeEditor(editor, enriched);
+    setStatus('request prepared');
+    setTimeout(() => {
+      if (!submitEditor(editor)) {
+        setStatus('could not submit', false);
+      }
+    }, 120);
+  }
+
+  function isStreaming() {
+    return Boolean(
+      document.querySelector('button[data-testid="stop-button"]') ||
+      document.querySelector('button[aria-label*="Stop"]') ||
+      document.querySelector('button[aria-label*="Dừng"]')
+    );
+  }
+
+  function latestAssistantMessage() {
+    const messages = document.querySelectorAll('[data-message-author-role="assistant"]');
+    return messages.length ? messages[messages.length - 1] : null;
+  }
+
+  function parseToolCall(text) {
+    const match = text.match(TOOL_TAG);
+    if (!match) return null;
+    let raw = match[1].trim();
+    raw = raw.replace(/^\x60\x60\x60(?:json)?\s*/i, '').replace(/\s*\x60\x60\x60$/i, '').trim();
+    try {
+      const call = JSON.parse(raw);
+      if (!call || typeof call.action !== 'string') return null;
+      return call;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function fingerprint(call) {
+    try {
+      return call.action + '::' + JSON.stringify(call);
+    } catch (error) {
+      return '';
+    }
+  }
+
+  async function sendToolResult(call, response) {
+    const editor = getEditor();
+    if (!editor) {
+      setStatus('composer not found', false);
+      return;
+    }
+
+    let body;
+    if (response && response.ok) {
+      body = JSON.stringify(response.result, null, 2);
+    } else {
+      body = 'ERROR: ' + ((response && response.error) || 'Unknown local bridge error');
+    }
+
+    if (body.length > MAX_RESULT_CHARS) {
+      body = body.slice(0, MAX_RESULT_CHARS) + '\n...[result truncated by extension]';
+    }
+
+    const resultMessage = [
+      '[LOCAL_BRIDGE_RESULT]',
+      'Action: ' + call.action,
+      body,
+      '',
+      '[LOCAL BRIDGE CONTINUATION]',
+      'Use this real local result. If you need another local read, reply only with the next single <LOCAL_TOOL> request. Otherwise answer the original user request normally.'
+    ].join('\n');
+
+    writeEditor(editor, resultMessage);
+    setStatus(response && response.ok ? 'result returned' : 'tool error', Boolean(response && response.ok));
+    setTimeout(() => {
+      if (!submitEditor(editor)) setStatus('could not return result', false);
+    }, 120);
+  }
+
+  async function inspectAssistant() {
+    if (processing || isStreaming()) return;
+    const message = latestAssistantMessage();
+    if (!message) return;
+
+    const text = message.innerText || message.textContent || '';
+    const call = parseToolCall(text);
+    if (!call) return;
+
+    const fp = fingerprint(call);
+    if (!fp || executed.has(fp)) return;
+    executed.add(fp);
+    processing = true;
+    setStatus('reading local data');
+
+    try {
+      const allowed = new Set(['list_directory', 'read_file', 'file_info', 'search_text']);
+      if (!allowed.has(call.action)) {
+        await sendToolResult(call, { ok: false, error: 'Action is not allowed by read-only browser bridge.' });
+        return;
+      }
+      const response = await send({ type: 'BRIDGE_CALL', call });
+      await sendToolResult(call, response);
+    } finally {
+      setTimeout(() => {
+        processing = false;
+      }, 700);
+    }
+  }
+
+  document.addEventListener(
+    'keydown',
+    (event) => {
+      if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return;
+      const editor = getEditor();
+      if (!editor) return;
+      const active = document.activeElement;
+      if (active !== editor && !editor.contains(active)) return;
+      interceptManualSend(event, editor);
+    },
+    true
+  );
+
+  document.addEventListener(
+    'click',
+    (event) => {
+      if (bypassNextSend) return;
+      const target = event.target;
+      const button = target && target.closest ? target.closest('button') : null;
+      if (!button) return;
+      const isSend =
+        button.matches('[data-testid="send-button"]') ||
+        /send|gửi/i.test(button.getAttribute('aria-label') || '');
+      if (!isSend) return;
+      const editor = getEditor();
+      if (editor) interceptManualSend(event, editor);
+    },
+    true
+  );
+
+  const observer = new MutationObserver(() => {
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => {
+      void inspectAssistant();
+    }, 450);
+  });
+
+  observer.observe(document.documentElement, { childList: true, subtree: true });
+  ensureBadge();
+  void refreshTools();
+  setInterval(() => {
+    void refreshTools();
+  }, 15000);
+})();

@@ -4,6 +4,8 @@ const endpoint = process.env.MCP_SELF_TEST_URL ?? 'http://127.0.0.1:8787/mcp';
 const healthUrl = new URL('/health', endpoint).toString();
 const root = path.resolve(process.env.MCP_SELF_TEST_ROOT ?? process.cwd());
 const protocolVersion = '2025-11-25';
+const bridgeBase = new URL('/bridge/', endpoint).toString();
+const bridgeHeaders = { 'x-local-bridge-client': 'mcp-chatgpt-extension-v1' };
 
 type JsonRpcResponse = {
   jsonrpc?: string;
@@ -65,6 +67,20 @@ async function rpc(method: string, params: Record<string, unknown>, options?: { 
 
 async function callTool(name: string, args: Record<string, unknown> = {}): Promise<ToolResult> {
   return (await rpc('tools/call', { name, arguments: args })) as ToolResult;
+}
+
+async function bridgeRequest(pathname: string, init?: RequestInit): Promise<Record<string, unknown>> {
+  const response = await fetch(new URL(pathname, bridgeBase), {
+    ...init,
+    headers: {
+      ...bridgeHeaders,
+      ...(init?.body ? { 'content-type': 'application/json' } : {}),
+      ...(init?.headers ?? {})
+    }
+  });
+  const body = (await response.json()) as Record<string, unknown>;
+  if (!response.ok) throw new Error(`Bridge HTTP ${response.status}: ${JSON.stringify(body)}`);
+  return body;
 }
 
 function textPayload(result: ToolResult): unknown {
@@ -137,6 +153,35 @@ await check('tools/list exposes core tools', async () => {
   const required = ['fs_read_file', 'fs_write_file', 'shell_exec', 'process_start', 'process_status', 'git_status', 'git_commit'];
   const missing = required.filter((name) => !names.has(name));
   assert(missing.length === 0, `Missing tools: ${missing.join(', ')}`);
+});
+
+await check('browser bridge health', async () => {
+  const body = await bridgeRequest('health');
+  assert(body.ok === true, `Bridge health was not ok:true: ${JSON.stringify(body)}`);
+  assert(body.mode === 'read-only', `Bridge mode was not read-only: ${JSON.stringify(body)}`);
+});
+
+await check('browser bridge read', async () => {
+  const body = await bridgeRequest('call', {
+    method: 'POST',
+    body: JSON.stringify({ action: 'read_file', path: path.join(root, 'README.md'), startLine: 1, endLine: 20 })
+  });
+  assert(body.ok === true, `Bridge read failed: ${JSON.stringify(body)}`);
+  const result = body.result as Record<string, unknown>;
+  assert(String(result.text ?? '').includes('# MCP_Chatgpt'), 'Bridge README content marker was not found.');
+});
+
+await check('browser bridge rejects outside root', async () => {
+  const outside = process.platform === 'win32' ? 'C:\\Windows\\win.ini' : '/etc/hosts';
+  const response = await fetch(new URL('call', bridgeBase), {
+    method: 'POST',
+    headers: { ...bridgeHeaders, 'content-type': 'application/json' },
+    body: JSON.stringify({ action: 'read_file', path: outside })
+  });
+  const body = (await response.json()) as Record<string, unknown>;
+  assert(response.status === 400, `Outside-root bridge read status was ${response.status}`);
+  assert(body.ok === false, `Outside-root bridge read unexpectedly succeeded: ${JSON.stringify(body)}`);
+  assert(/outside allowedRoots/i.test(String(body.error ?? '')), `Unexpected bridge rejection: ${JSON.stringify(body)}`);
 });
 
 await check('filesystem read', async () => {

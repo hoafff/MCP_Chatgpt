@@ -2,7 +2,7 @@
 
 Local MCP server for a Windows PC so a supported ChatGPT/OpenAI MCP client can read/edit project files, run PowerShell/CLI commands, manage long-running processes, and inspect or mutate Git repositories.
 
-> **Status:** MVP v0.1.0. The HTTP server binds to `127.0.0.1` only. It is designed to be paired with OpenAI Secure MCP Tunnel rather than exposed directly to the public internet.
+> **Status:** MVP v0.1.0. The HTTP server binds to `127.0.0.1` only. It now supports both MCP clients and an experimental read-only browser bridge for normal `chatgpt.com` conversations.
 
 ## What this MVP exposes
 
@@ -90,6 +90,51 @@ Or use a different policy file:
 $env:MCP_POLICY_PATH = "D:\\MCP\\my-policy.json"
 npm start
 ```
+
+## ChatGPT Web Local Bridge (experimental)
+
+For ChatGPT Plus users who want to keep using a normal conversation on `chatgpt.com` without the OpenAI API or a separate chat UI, this repository includes an unpacked Chrome/Edge extension under `extension/`.
+
+The extension is **not** native ChatGPT MCP. It augments the browser UI:
+
+```text
+normal ChatGPT web conversation
+        ↓
+Chrome/Edge content script
+        ↓
+extension background worker
+        ↓
+http://127.0.0.1:8787/bridge/*
+        ↓
+existing allowedRoots / protectedPaths / audit policy
+```
+
+Browser Bridge v0.1 is intentionally **read-only** and exposes only:
+
+- `list_directory`
+- `read_file`
+- `file_info`
+- `search_text`
+
+The bridge reuses the existing filesystem security policy. It does not expose shell, process, write, delete, Git commit, or Git push actions.
+
+After building and starting the local server:
+
+1. Open `chrome://extensions` or `edge://extensions`.
+2. Enable **Developer mode**.
+3. Choose **Load unpacked**.
+4. Select `E:\\MCP_ChatGpt\\extension` (or this repo's local `extension` directory).
+5. Refresh `https://chatgpt.com/`.
+6. Confirm the lower-right badge says **Local Bridge: ready**.
+7. Trigger it with `@local` or an absolute Windows path in your prompt.
+
+Example:
+
+```text
+@local đọc file E:\\MCP_ChatGpt\\README.md và tóm tắt project này
+```
+
+See `extension/README.md` for the bridge workflow and troubleshooting notes.
 
 ## Automated self-test
 
@@ -190,6 +235,8 @@ Useful upstream references:
 - [ ] Process output cursors/streaming
 - [ ] Installer / Windows service or scheduled startup
 - [ ] Secure MCP Tunnel setup helper
+- [x] Read-only ChatGPT Web browser bridge
+- [ ] Browser bridge write/approval layer
 - [ ] GUI automation layer (optional)
 
 ## License
